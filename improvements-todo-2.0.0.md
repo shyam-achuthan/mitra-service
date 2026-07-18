@@ -31,9 +31,16 @@ path can no longer store an arbitrary/invalid client `flow_name` as `session_typ
 
 ## Issue 3 - English translation missing
 
+**Code fix: DONE on optimizations/2.0.0.** Fixed the broken `is_english_text` detector (Defect B) and
+stopped the silent failure-passthrough (Defect A): translation failures now log at ERROR, are counted, and
+set `other_params['translation_failed'] = True` on the story so it is queryable and reprocessable instead
+of being silently marked COMPLETED with vernacular text in English fields. Remaining below.
+
 - [ ] (DATA) Re-translate the ~100 reports whose English fields silently hold vernacular text. Safe to run
-  only AFTER the code fix (which stops storing failure as success), otherwise reprocessing can recorrupt.
-  Selector: stories flagged by the new `translation_failed` marker plus any pre-existing suspected rows.
+  now that the code fix stops storing failure as success (reprocessing can no longer recorrupt).
+  Selector for NEW failures: `Story.objects.filter(other_params__translation_failed=True)`. Older
+  pre-fix corrupted rows have no marker and need a separate heuristic sweep (detect non-Latin script in
+  English fields using the corrected detection logic).
 
 ## Issue 4 - translation cron / language coverage
 
