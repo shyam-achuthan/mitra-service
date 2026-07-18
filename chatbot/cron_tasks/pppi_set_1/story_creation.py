@@ -232,10 +232,10 @@ def create_story():
                 record_generation_failure(session, 'llm_no_valid_story')
                 continue
 
-            clear_generation_failure(session)
             story = _persist_story_from_llm_response(
                 session_id=session, response=response
             )
+            clear_generation_failure(session)
             logger.info(
                 "Created story id=%s session=%s route=%s title=%s other_params_keys=%s",
                 story.id,
