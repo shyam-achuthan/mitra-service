@@ -70,11 +70,15 @@ class AsyncShikshalokamChaupalConsumer(AsyncBaseConsumer):
                 # ws/common/. Log every session that still arrives here so the "reports under a flow
                 # that should not exist" question (issue 5) becomes queryable evidence (which clients
                 # / how often) instead of a per-case guess. Includes the ip_address to help identify
-                # the stale client build.
+                # the stale client build. The identifiers come from the client frame, so sanitize
+                # them (strip CR/LF, cap length) before logging to prevent log forging.
+                def _safe(value):
+                    return str(value).replace('\r', ' ').replace('\n', ' ')[:200]
+
                 logger.warning(
                     "[DEPRECATED ENDPOINT] Session on legacy ws/shikshalokam_chaupal/: "
                     "session_id=%s profile_id=%s ip=%s. Expected new traffic on ws/common/.",
-                    self.session_id, self.profile_id, self.ip_address,
+                    _safe(self.session_id), _safe(self.profile_id), _safe(self.ip_address),
                 )
 
                 self.company_bot = await self.get_company_bot(profile, '/shikshalokam_chaupal')
