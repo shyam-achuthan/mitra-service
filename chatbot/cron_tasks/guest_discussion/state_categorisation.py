@@ -120,9 +120,12 @@ def _match_location(location_text: str, mapping_data: Dict[str, Any]) -> Dict[st
 
     Resolution order:
       1. If state pattern found in text: restrict district search to that state only.
-         District match → return {state, district}. No district match → return state-only.
-      2. No state hint: district pattern match (first across all states) → infer state.
-      3. State pattern match only → state only, district remains null.
+         District match -> return {state, district}. No district match -> return state-only.
+      2. No state hint: match the district name across all states. Infer a state only when the
+         district name is unique to one state; if it is ambiguous across states (e.g. "Ramnagar"
+         in both Bihar and Karnataka), return unmapped (state/district null) so the record routes
+         to the universal unmapped table instead of being guessed by list order.
+      3. No district match: fall back to a bare state pattern match if present.
     """
     result: Dict[str, Optional[str]] = {'state': None, 'district': None, 'organisation': None}
 
@@ -150,15 +153,37 @@ def _match_location(location_text: str, mapping_data: Dict[str, Any]) -> Dict[st
         result['state'] = matched_state['name']
         return result
 
-    # Pass 2b: no state hint — original behavior (first district match across all states)
+    # Pass 2b: no state hint. Collect every (state, district) whose district pattern matches,
+    # across all states, then only infer a state when the district name is UNIQUE. If the same
+    # district name exists in more than one state (e.g. "Ramnagar" in both Bihar and Karnataka),
+    # we cannot safely pick one without a state hint, so we leave state/district null and let the
+    # record route to the universal unmapped table. The previous code returned the first match by
+    # `states` list order, which silently mis-mapped ambiguous districts (issue 9).
+    district_matches = []
     for state in states:
         for district in state['districts']:
             if _match_patterns(district['matching_patterns'], location_text):
-                result['state'] = state['name']
-                result['district'] = district['name']
-                result['organisation'] = district.get('organisation')
-                return result
+                district_matches.append((state, district))
 
+    distinct_states = {state['name'] for state, _ in district_matches}
+    if len(district_matches) >= 1 and len(distinct_states) == 1:
+        # Unambiguous: exactly one state owns the matched district name(s).
+        state, district = district_matches[0]
+        result['state'] = state['name']
+        result['district'] = district['name']
+        result['organisation'] = district.get('organisation')
+        return result
+    elif len(distinct_states) > 1:
+        # Ambiguous across states with no state hint -> unmapped (leave state/district null).
+        district_name = district_matches[0][1]['name']
+        logger.warning(
+            "Ambiguous district '%s' matched in multiple states %s with no state hint in "
+            "location='%s'; routing to unmapped (issue 9).",
+            district_name, sorted(distinct_states), location_text,
+        )
+        return result
+
+    # Pass 3: no district match at all -> fall back to a bare state pattern match if present.
     for state in states:
         if _match_patterns(state['matching_patterns'], location_text):
             result['state'] = state['name']
