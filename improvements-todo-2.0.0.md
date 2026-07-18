@@ -120,8 +120,13 @@ and generate no migration. Remaining below.
 
 ## Issue 9 - Ramnagar cross-state mapping
 
+**Code fix: DONE on optimizations/2.0.0-18jul.** Rewrote Pass 2b in `_match_location`: a district name
+that is ambiguous across states with no state hint now returns unmapped (instead of first-match-by-list-
+order), and ambiguous hits are logged at WARNING. Prevents new mis-mappings. Remaining below.
+
 - [ ] (DATA) Move the existing 4 mis-mapped rows to the universal unmapped table (the previous team's
   immediate action). The code fix prevents new occurrences; existing wrong values need an explicit
   re-run / reset which is the data task.
 - [ ] (REVIEW) Confirm whether `stakeholder_fgd` / `student_fgd` `district_classification.py` share the
-  same ambiguity blind spot and need the equivalent fix.
+  same ambiguity blind spot and need the equivalent fix. (Not changed on this branch; they use a
+  separate fuzzy-match approach and need their own review before touching.)
