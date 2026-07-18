@@ -15,6 +15,10 @@ Legend: `[ ]` pending, `[x]` done, `(DATA)` mutates existing rows, `(CONFIG)` en
 
 ## Issue 1 and 2 - session_type mapping
 
+**Code fix: DONE on optimizations/2.0.0.** Added `chatbot/utils/session_type_utils.resolve_session_type`
+and routed `async_consumer`, `async_chaupal_consumer`, and `free_flow_consumer` through it, so the write
+path can no longer store an arbitrary/invalid client `flow_name` as `session_type`. Remaining below.
+
 - [ ] (COORD) Agree the single canonical `session_type` value for the chaupal / guest-discussion flow
   with the Metabase / Programs owners. The code fix derives/validates `session_type`, but the exact
   string it should write (`shikshalokam_chaupal` vs `guest_discussion`) must match what the dashboards
