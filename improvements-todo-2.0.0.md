@@ -74,8 +74,14 @@ on the Product decision below. Remaining below.
 
 ## Issue 6 - dashboard count / created_at
 
+**Code fix: DONE on optimizations/2.0.0-18jul.** New stories now get `client_created_at` populated from
+the originating `ChatSession.created_at` in the main path and all nine pilot backfill crons, giving
+dashboards a stable, backfill-proof anchor. Remaining below.
+
 - [ ] (DASHBOARD) Point the guest-discussion and MI-Story date filters at `chat_sessions.created_at`
-  (joined to the story), per the previous team's plan. Document the intended metric explicitly.
+  (joined to the story), per the previous team's plan. Document the intended metric explicitly. Once
+  `client_created_at` is populated (and optionally backfilled), the dashboards can filter on that single
+  story-side column instead of joining to chat_sessions.
 - [ ] (DATA) Optionally backfill `Story.client_created_at` on historical stories from their session
   origin timestamp (the code fix only sets it for NEW stories).
 
