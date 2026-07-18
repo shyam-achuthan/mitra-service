@@ -218,6 +218,17 @@ def fix_guest_discussion_stories():
     print("Report saved to:", OUTPUT_FILE)
     print("====================================")
 
+    # Return a summary so the translation cron can report metrics for this flow (previously this
+    # function returned None, so its counts always showed zero). `failed` is a list of dicts with
+    # `story_id`, which the cron uses to log the specific stories that need attention.
+    return {
+        "total": total,
+        "fixed": len(fixed),
+        "failed": failed,
+        "skipped": len(skipped),
+        "report_file": OUTPUT_FILE,
+    }
+
 
 def fix_guest_discussion_stories_by_id(story_ids=None, session_id=None):
     stories = Story.objects.filter(

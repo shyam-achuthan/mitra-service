@@ -20,10 +20,19 @@ def _summarize(label, result):
         logger.error("[TRANSLATION CRON] %s returned no summary (result=%r)", label, result)
         return {'fixed': 0, 'failed': 0, 'skipped': 0, 'total': 0}
 
+    def _count(value):
+        # The fix_* functions are inconsistent: some return integer counts (Guest MI Story),
+        # others may return lists of records. Accept either shape so this never throws.
+        if isinstance(value, int):
+            return value
+        if isinstance(value, (list, tuple)):
+            return len(value)
+        return 0
+
     counts = {
-        'fixed': len(result.get('fixed', []) or []),
-        'failed': len(result.get('failed', []) or []),
-        'skipped': len(result.get('skipped', []) or []),
+        'fixed': _count(result.get('fixed', 0)),
+        'failed': _count(result.get('failed', 0)),
+        'skipped': _count(result.get('skipped', 0)),
         'total': result.get('total', 0),
     }
     logger.info(
@@ -31,7 +40,12 @@ def _summarize(label, result):
         label, counts['total'], counts['fixed'], counts['failed'], counts['skipped'],
     )
     if counts['failed']:
-        failed_ids = [f.get('story_id') for f in (result.get('failed') or []) if isinstance(f, dict)]
+        # Only a list-shaped 'failed' carries per-story detail; an integer count has none.
+        raw_failed = result.get('failed')
+        failed_ids = (
+            [f.get('story_id') for f in raw_failed if isinstance(f, dict)]
+            if isinstance(raw_failed, (list, tuple)) else []
+        )
         logger.error(
             "[TRANSLATION CRON] %s had %s FAILED stor(y/ies) needing attention: %s",
             label, counts['failed'], failed_ids,
