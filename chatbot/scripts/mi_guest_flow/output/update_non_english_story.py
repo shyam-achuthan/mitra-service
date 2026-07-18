@@ -1,4 +1,3 @@
-import re
 import logging
 from datetime import datetime
 
@@ -13,18 +12,9 @@ logger = logging.getLogger("django")
 OUTPUT_FILE = "guest_mi_story_fix_report.txt"
 
 # ---------- LANGUAGE DETECTION ----------
-ENGLISH_LETTER_REGEX = re.compile(r'[A-Za-z]')
-ANY_LETTER_REGEX = re.compile(r'[A-Za-z\u00C0-\u024F\u0900-\u097F\u0C80-\u0CFF]')
-
-
-def is_non_english_text(text):
-    """Check if text contains non-English characters"""
-    if not text or not isinstance(text, str):
-        return False
-    # Ignore numbers / dates / symbols
-    if not ANY_LETTER_REGEX.search(text):
-        return False
-    return not ENGLISH_LETTER_REGEX.search(text)
+# Detection now delegates to the shared, whitelist-free detector so every supported language
+# (Hindi, Kannada, Telugu, Odia, Tamil, ...) is handled and the four copies cannot drift apart.
+from chatbot.utils.language_detection import is_non_english_text
 
 
 def find_non_english_in_list(lst, field_name):

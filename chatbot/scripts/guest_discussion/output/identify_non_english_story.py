@@ -1,11 +1,5 @@
-import re
 from chatbot.models import Story, SessionFlowName, ChatSession
-
-# English letters (Hinglish allowed)
-ENGLISH_LETTER_REGEX = re.compile(r'[A-Za-z]')
-
-# Any alphabetic letter (Latin + Devanagari)
-ANY_LETTER_REGEX = re.compile(r'[A-Za-z\u00C0-\u024F\u0900-\u097F]')
+from chatbot.utils.language_detection import is_non_english_text
 
 # Text fields in Story model
 TEXT_FIELDS = [
@@ -28,19 +22,12 @@ TEXT_FIELDS = [
 
 def has_non_english_letters(text):
     """
-    Returns True ONLY if:
-    - text contains alphabetic letters
-    - AND contains NO English letters (A-Z)
+    Returns True if the text contains non-English (non-Latin script) letters.
+
+    Delegates to the shared, whitelist-free detector so this copy can no longer drift out of sync
+    (it was previously missing the Kannada range, silently skipping Kannada stories).
     """
-    if not text or not isinstance(text, str):
-        return False
-
-    # Ignore numbers, dates, symbols
-    if not ANY_LETTER_REGEX.search(text):
-        return False
-
-    # Letters exist but none are English → non-English
-    return not ENGLISH_LETTER_REGEX.search(text)
+    return is_non_english_text(text)
 
 
 def contains_non_english_in_json(obj):
