@@ -447,6 +447,23 @@ def save_generic_story(
                 text=translate_to_english_if_needed(raw_problem_statement, translation_voice_provider, language)
             )
 
+        # The failure marker set before story.save() only reflected the forward (vernacular->en)
+        # translation of the base story. The reverse (en->vernacular) StoryTranslation build above
+        # and the problem_statement translation run afterwards and can also fail. Re-check now so a
+        # failure in those later phases still marks the story translation_failed and re-saves it,
+        # rather than leaving a StoryTranslation with untranslated text and no marker (issue 3).
+        if translation_failure_tracker.had_failure() and not (story.other_params or {}).get('translation_failed'):
+            other_params = dict(story.other_params or {})
+            other_params['translation_failed'] = True
+            other_params['translation_failure_count'] = translation_failure_tracker.failure_count()
+            story.other_params = other_params
+            story.save(update_fields=['other_params'])
+            logger.error(
+                "Story for session=%s had %s translation failure(s) including the reverse/vernacular "
+                "phase; marked translation_failed=True for reprocessing.",
+                session, translation_failure_tracker.failure_count(),
+            )
+
         return story, problem_statement
 
     except StoryError:
