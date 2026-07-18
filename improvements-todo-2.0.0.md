@@ -15,11 +15,11 @@ Legend: `[ ]` pending, `[x]` done, `(DATA)` mutates existing rows, `(CONFIG)` en
 
 ## Pre-merge review findings (verification pass, no code changed)
 
-A senior self-review plus three adversarial review agents ran over the whole branch. Findings, by
-severity. These are follow-up CODE fixes needed on this branch before merge; they were NOT applied during
-the verification pass (no-code-changes instruction).
+A senior self-review plus three adversarial review agents ran over the whole branch. All four findings
+below have since been FIXED in follow-up `[review-fix]` commits on this branch (verified by re-running
+the logic). Kept here for the record.
 
-- [ ] **(BUG - MERGE BLOCKER) `translation_cron._summarize` throws `TypeError` on every non-empty run.**
+- [x] **(BUG - MERGE BLOCKER) FIXED. `translation_cron._summarize` threw `TypeError` on every non-empty run.**
   `_summarize` calls `len()` on `result['fixed'/'failed'/'skipped']`, but `fix_guest_mi_story_stories()`
   returns those keys as **ints**, not lists (`len(3)` -> TypeError). Also `fix_guest_discussion_stories()`
   has no `return`, so it returns `None` and its metrics always report zero. Impact: the outer try/except
@@ -28,7 +28,7 @@ the verification pass (no-code-changes instruction).
   treat the return values as ints (drop the `len(...)`), and give `fix_guest_discussion_stories()` a
   proper `{fixed, failed, skipped, total}` return, or read its existing counts.
 
-- [ ] **(REGRESSION - RISKY) Accented-Latin text now classified as non-English by `is_non_english_text`.**
+- [x] **(REGRESSION - RISKY) FIXED. Accented-Latin text now classified as non-English by `is_non_english_text`.**
   The new whitelist-free detector (`any(ch.isalpha() and ord(ch) > 127)`) treats `café`, `José`,
   `Peña`, `résumé`, `Straße` as non-English (old whitelist treated them as English). Intended Indic-script
   wins (Telugu/Odia/Tamil) are correct; the accent side effect is not. Impact is bounded: for English
@@ -40,7 +40,7 @@ the verification pass (no-code-changes instruction).
   Supplement / Latin-Extended accented ranges, or require a recognized non-Latin script block, instead of
   a bare `ord > 127` test.
 
-- [ ] **(COVERAGE GAP - MINOR) `translation_failed` marker misses the reverse (en->vernacular) phase.**
+- [x] **(COVERAGE GAP - MINOR) FIXED. `translation_failed` marker missed the reverse (en->vernacular) phase.**
   In `save_generic_story` the `had_failure()` check runs BEFORE `create_generic_story_translation()` and
   the `problem_statement` translation, which do en->vernacular `translate_field` calls. Failures there
   are recorded into the thread-local but never inspected, so a `StoryTranslation` can hold English text
@@ -48,7 +48,7 @@ the verification pass (no-code-changes instruction).
   `start_scope`). FIX (optional): evaluate `had_failure()` after those later phases, or update the marker
   post-save.
 
-- [ ] **(CONSISTENCY - MINOR) pppi_set_1 clears failure markers before persist, unlike the other 8 crons.**
+- [x] **(CONSISTENCY - MINOR) FIXED. pppi_set_1 cleared failure markers before persist, unlike the other 8 crons.**
   In pppi_set_1 the order is `clear_generation_failure(session)` then `_persist_story_from_llm_response`;
   the other 8 clear after persist. If persist raises, markers are cleared with no story created (caught by
   the outer try/except, re-selected next run, so no crash/infinite-skip). FIX: move the clear after the
