@@ -1,6 +1,9 @@
 from chatbot.llm_models.llm_script import handle_bedrock_model, handle_openai_model
 from chatbot.models import ChatSession, CompanyBot, CompanyChat, Story, ChatStatus
 from chatbot.models.enums import LLMProvider, StoryStatusChoices
+from chatbot.cron_tasks.story_generation_tracking import (
+    record_generation_failure, clear_generation_failure, exclude_exhausted,
+)
 from datetime import timedelta
 from django.db.models import Exists, OuterRef, Q
 from django.utils import timezone
@@ -24,8 +27,14 @@ def _story_response_has_title(response):
 
 def chat_sessions_without_story(session_type=STUDENT_FGD_SESSION_TYPE):
     """
-    ChatSession rows with session_status COMPLETED that have no Story with the same
-    `session` string (Story links via Story.session, not a FK on ChatSession).
+    ChatSession rows of this session_type that have no Story with the same `session`
+    string (Story links via Story.session, not a FK on ChatSession).
+
+    Eligibility by age, to avoid picking up sessions that are still in progress:
+      - sessions older than 30 minutes are included regardless of session_status, and
+      - sessions newer than 30 minutes are included only when session_status is COMPLETED.
+    Sessions already marked story_generation_exhausted are excluded (see
+    story_generation_tracking) so persistently-failing sessions are not retried forever.
     Pass session_type=None to include all session types.
     """
     linked_story = Story.objects.filter(session=OuterRef('session'))
@@ -37,7 +46,7 @@ def chat_sessions_without_story(session_type=STUDENT_FGD_SESSION_TYPE):
         Q(created_at__lte=half_hour_ago)
         | Q(created_at__gte=half_hour_ago, session_status=ChatStatus.COMPLETED)
     )
-    return qs
+    return exclude_exhausted(qs)
 
 
 def chat_session_ids_without_story(session_type=STUDENT_FGD_SESSION_TYPE):
@@ -222,9 +231,11 @@ def create_story():
                     STORY_LLM_MAX_ATTEMPTS,
                     session,
                 )
+                record_generation_failure(session, 'llm_no_valid_story')
                 continue
 
             story = _persist_story_from_llm_response(session_id=session, response=response)
+            clear_generation_failure(session)
             logger.info(
                 'Created story id=%s session=%s route=%s title=%s other_params_keys=%s',
                 story.id,
