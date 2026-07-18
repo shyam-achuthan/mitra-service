@@ -44,9 +44,17 @@ of being silently marked COMPLETED with vernacular text in English fields. Remai
 
 ## Issue 4 - translation cron / language coverage
 
+**Code fix: DONE on optimizations/2.0.0.** Replaced the four per-file script whitelists with one shared
+whitelist-free detector (`chatbot/utils/language_detection`), so Telugu / Odia / Tamil are no longer
+silently skipped and the stale copy is corrected. Added per-run metrics + anomaly ERROR logging to
+`translation_cron`. Remaining below.
+
 - [ ] (DATA) Backfill translations for historically skipped Telugu / Odia (and any residual Kannada)
   reports. The cron will pick these up on its normal forward runs once the detector fix ships; a
   deliberate backfill of old rows is the data task.
+- [ ] (OPS) Wire the cron's new ERROR-level anomaly logs into an actual alert channel (email/Slack) so
+  the dev team is notified, per the previous team's "cron notifications" next step. The code now emits
+  the signals; routing them to a human is an ops/config task.
 
 ## Issue 5 - shikshalokam_chaupal still live
 
