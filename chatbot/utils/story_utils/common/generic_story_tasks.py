@@ -9,6 +9,7 @@ from chatbot.utils.story_llama_utils import translate_field
 from chatbot.utils.story_utils.format_utils import clean_escaped_text, get_formatted_story
 from chatbot.utils.transliterate_utils import transliterate_text, get_transliteration_output
 from chatbot.utils import translation_failure_tracker
+from chatbot.utils.story_timestamp_utils import set_client_created_at_if_missing
 
 logger = logging.getLogger('django')
 
@@ -391,10 +392,17 @@ def save_generic_story(
         })
 
         if story:
+            # Anchor the story to when the discussion happened, but never overwrite an existing
+            # value: only set client_created_at from the session origin time if it is not already
+            # populated on this story (issue 6, backfill-proof dashboard anchor).
+            if not story.client_created_at:
+                set_client_created_at_if_missing(story_fields_to_update, session)
             for field, value in story_fields_to_update.items():
                 if hasattr(story, field):
                     setattr(story, field, value)
         else:
+            # New story: stamp client_created_at from the originating session's created_at.
+            set_client_created_at_if_missing(story_fields_to_update, session)
             default_story_fields = {
                 'title': 'Improvement_story',
                 'content': '',

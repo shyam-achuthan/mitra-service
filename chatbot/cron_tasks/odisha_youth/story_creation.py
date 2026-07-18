@@ -195,6 +195,7 @@ def _persist_story_from_llm_response(session_id, response):
         title=title,
         other_params=other_params,
         author=author,
+        client_created_at=chat_session.created_at if chat_session else None,
         stage=StoryStatusChoices.COMPLETED
     )
 
