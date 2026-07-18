@@ -21,7 +21,14 @@ def is_english_text(text):
     original_text = str(text)
     logger.info(f"[ENGLISH CHECK] Starting English validation. text='{original_text}'")
 
-    # Remove common punctuation and numbers
+    # Any non-ASCII letter (Devanagari, Kannada, Telugu, Odia, Tamil, etc.) means the text
+    # is not English. This is a positive test for non-English script and does not depend on a
+    # whitelist of ranges, so a new supported language cannot silently be misclassified.
+    if any(ch.isalpha() and ord(ch) > 127 for ch in original_text):
+        logger.info(f"[ENGLISH CHECK] Non-ASCII letter detected; text is non-English. text='{original_text}'")
+        return False
+
+    # Remove common punctuation and numbers so we can inspect the remaining letters.
     cleaned_text = re.sub(
         r'[0-9\s\.,\!\?\-\(\)\[\]\{\}\"\'\:\;\@\#\$\%\^\&\*\+\=\_\|\\\/<>~`]',
         '',
@@ -29,12 +36,20 @@ def is_english_text(text):
     )
     logger.info(f"[ENGLISH CHECK] Cleaned text after removing numbers & punctuation: '{cleaned_text}'")
 
-    is_english = bool(re.match(r'^[a-zA-Z]*$', cleaned_text))
+    # Text with no letters at all (pure numbers / symbols) has nothing to translate, so treat
+    # it as English and skip, preserving prior behavior. When letters remain, every one must be
+    # a Latin letter for the text to count as English. The non-ASCII-letter guard above already
+    # rejected non-Latin scripts, so this fullmatch is the ASCII-only confirmation.
+    if cleaned_text == '':
+        logger.info(f"[ENGLISH CHECK] No letters after cleaning; nothing to translate. text='{original_text}'")
+        return True
+
+    is_english = bool(re.fullmatch(r'[a-zA-Z]+', cleaned_text))
 
     if is_english:
         logger.info(f"[ENGLISH CHECK] Text identified as English. text='{original_text}', cleaned='{cleaned_text}'")
     else:
-        logger.info(f"[ENGLISH CHECK] Non-English characters detected. text='{original_text}', cleaned='{cleaned_text}'")
+        logger.info(f"[ENGLISH CHECK] Non-Latin characters remain after cleaning. text='{original_text}', cleaned='{cleaned_text}'")
 
     return is_english
 
