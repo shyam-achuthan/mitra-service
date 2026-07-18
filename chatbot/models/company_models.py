@@ -1,4 +1,5 @@
 import os
+import logging
 from copy import deepcopy
 
 from django.core.exceptions import ValidationError
@@ -15,6 +16,8 @@ from chatbot.models.enums import (
     PreProcessType, PreProcessOutputMode, PostProcessType, PostProcessOutputMode,
     UserTypeChoices, OperationTypeChoices, BotStrategyChoices
 )
+
+logger = logging.getLogger('django')
 
 S3_BASE_URL = os.getenv('S3_BASE_URL')
 
@@ -432,6 +435,25 @@ class CompanyStateMachine(models.Model):
             self.postprocess_prompt = None
             self.postprocess_bot = None
             self.postprocess_output_mode = PostProcessOutputMode.NONE
+
+        # --- Transliteration guard for identity / personal-info steps ---
+        # Steps that capture proper nouns (names, organizations, locations) should transliterate,
+        # not translate, or values like "Mahila Samakhya" get translated to "Female Organisation"
+        # (issue 8). The text_conversion_type field defaults to TRANSLATE, so such a step can be
+        # created or migrated into a translating configuration silently. We surface that as a
+        # WARNING at save time (not a hard error, since step naming is not strictly enforced) so
+        # the drift is visible instead of being discovered when a name comes out wrong.
+        identity_markers = ('personal_info', 'personal', 'name', 'organization', 'organisation',
+                            'location', 'identity', 'profile')
+        step_name = (self.name or '').lower()
+        if (self.text_conversion_type == TextConversionType.TRANSLATE
+                and any(marker in step_name for marker in identity_markers)):
+            logger.warning(
+                "CompanyStateMachine '%s' (bot_id=%s) looks like an identity/personal-info step but is "
+                "configured to TRANSLATE, not TRANSLITERATE; proper nouns may be translated (issue 8). "
+                "Verify this is intended.",
+                self.name, getattr(self, 'company_bot_id', None),
+            )
 
     def save(self, *args, **kwargs):
         self.full_clean()
