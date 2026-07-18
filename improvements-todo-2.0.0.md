@@ -58,9 +58,18 @@ silently skipped and the stale copy is corrected. Added per-run metrics + anomal
 
 ## Issue 5 - shikshalokam_chaupal still live
 
-- [ ] (COORD) Confirm with Product whether the `shikshalokam_chaupal` flow is truly retired. The code fix
-  (retire vs gate the route) depends on this decision and must be sequenced with a frontend release if
-  any legitimate client still uses the old endpoint.
+**Code fix (partial): DONE on optimizations/2.0.0-18jul.** Added a WARNING log for every session that
+still hits the legacy `ws/shikshalokam_chaupal/` endpoint (queryable evidence for the retirement
+decision), and deleted the orphaned dead `chaupal_consumer.py`. The actual route retirement stays gated
+on the Product decision below. Remaining below.
+
+- [ ] (COORD) Confirm with Product whether the `shikshalokam_chaupal` flow is truly retired. Retiring or
+  gating the `ws/shikshalokam_chaupal/` route depends on this decision and must be sequenced with a
+  frontend release if any legitimate client still uses the old endpoint. Use the new
+  `[DEPRECATED ENDPOINT]` warning logs to quantify remaining usage before deciding.
+- [ ] (CODE, after COORD) Once retirement is confirmed, remove/gate the `ws/shikshalokam_chaupal/` route
+  in `routing.py` (and the now-unused `async_chaupal_consumer`) so stale clients fail loudly. Deferred
+  only because it needs the COORD decision; the change itself is dataset-safe.
 - [ ] (DATA) Reclassify the 3 existing `shikshalokam_chaupal` rows if the flow is confirmed retired.
 
 ## Issue 6 - dashboard count / created_at
