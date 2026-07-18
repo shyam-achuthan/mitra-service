@@ -8,6 +8,7 @@ from chatbot.models.story_vernacular_model import StoryVernacular
 from chatbot.utils.story_llama_utils import translate_field
 from chatbot.utils.story_utils.format_utils import clean_escaped_text, get_formatted_story
 from chatbot.utils.transliterate_utils import transliterate_text, get_transliteration_output
+from chatbot.utils import translation_failure_tracker
 
 logger = logging.getLogger('django')
 
@@ -75,10 +76,12 @@ def translate_to_english_if_needed(text, voice_provider, source_language):
             logger.info(f"Translated data to english: {translated}.")
             return translated
         else:
-            logger.info(f"No voice provider available for translation. Keeping original text: {text}")
+            translation_failure_tracker.record_failure()
+            logger.error(f"No voice provider available for translation; translation marked FAILED. Keeping original text: {text}")
             return text
     except Exception as e:
-        logger.error(f"Error translating to English: {e}")
+        translation_failure_tracker.record_failure()
+        logger.error(f"Error translating to English; translation marked FAILED. Keeping original text. error={e}")
         return text
 
 
@@ -156,6 +159,10 @@ def save_generic_story(
 ):
     try:
         import copy
+        # Begin tracking translation failures for this story build. Any non-200 or exception in
+        # the per-field translation helpers flags this scope, so we can mark the story as having
+        # incomplete translation instead of silently storing vernacular text as English.
+        translation_failure_tracker.start_scope()
         if exclude_fields is None:
             exclude_fields = []
         exclude_fields_set = set(exclude_fields) if exclude_fields else set()
@@ -357,6 +364,22 @@ def save_generic_story(
                                                                                         language)
             else:
                 story_fields_to_update['location'] = ""
+
+        # If any per-field translation failed, some English fields still hold vernacular text.
+        # Record that on the story (in the other_params JSON catch-all, so no schema change) so a
+        # reprocessing job can find and re-translate it, instead of the failure being invisible.
+        if translation_failure_tracker.had_failure():
+            other_params['translation_failed'] = True
+            other_params['translation_failure_count'] = translation_failure_tracker.failure_count()
+            logger.error(
+                "Story for session=%s built with %s failed translation(s); marked translation_failed=True "
+                "in other_params for reprocessing.",
+                session, translation_failure_tracker.failure_count(),
+            )
+        else:
+            # Clear any stale marker from a previous partial build of the same story.
+            other_params.pop('translation_failed', None)
+            other_params.pop('translation_failure_count', None)
 
         story_fields_to_update.update({
             'author': profile if isinstance(profile, Profile) else Profile.objects.filter(id=profile.get("id")).first(),

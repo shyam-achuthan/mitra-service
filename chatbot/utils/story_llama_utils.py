@@ -3,6 +3,7 @@ import secrets
 import traceback
 from datetime import datetime
 from chatbot.utils.audio_provider_utils import text_translate_provider
+from chatbot.utils import translation_failure_tracker
 from shikshalokam.models import Project, ProjectStatus, ProjectVernacular, Task
 import logging
 
@@ -229,5 +230,13 @@ def translate_field(voice_provider, message_body, target_language, source_langua
         logger.info(f"Got 200 response from translation service: {response.get('content')}")
         return response.get('content')
     else:
-        logger.info(f"Translation service returned non-200; using original text: {message_body}")
+        # The translation provider failed. We still return the original text so the caller does
+        # not crash, but we record the failure so the story-building code can mark the story as
+        # having incomplete translation instead of silently treating vernacular text as English.
+        translation_failure_tracker.record_failure()
+        logger.error(
+            "Translation service returned non-200 (status=%s); original text kept and translation "
+            "marked as FAILED. source='%s' target='%s' body='%s'",
+            response.get('status'), source_language, target_language, message_body,
+        )
         return message_body
