@@ -102,6 +102,17 @@ docstring. The unbounded silent-retry loop is now bounded and the gap is queryab
 
 ## Issue 8 - org translate vs transliterate
 
+**Code fix: DONE on optimizations/2.0.0-18jul.** Added a save-time WARNING in
+`CompanyStateMachine.clean()` when an identity/personal-info step is set to TRANSLATE, and a read-only
+`audit_text_conversion` management command for QA-vs-PROD config-drift visibility. Both are dataset-safe
+and generate no migration. Remaining below.
+
+- [ ] (DECISION + MIGRATION) Optionally change the `text_conversion_type` default away from `TRANSLATE`
+  or make it required. Deferred deliberately: this is a model field change that generates a Django
+  migration, and no single default is universally safe (translate is right for content fields,
+  transliterate for identity steps). It does NOT reset the DB or alter existing rows, but it needs a
+  product decision on the desired default before shipping. The save-time warning + audit command cover
+  the recurrence risk in the meantime.
 - [ ] (CONFIG) Keep / verify the PROD revert of the guest-discussion bot's identity steps to
   transliteration (already done by the previous team). This is environment config, not code.
 - [ ] (DATA) Re-transliterate already-translated org/person names in existing stories/profiles. Depends
