@@ -87,8 +87,18 @@ dashboards a stable, backfill-proof anchor. Remaining below.
 
 ## Issue 7 - sessions vs story discrepancy
 
+**Code fix: DONE on optimizations/2.0.0-18jul.** Added `story_generation_tracking` (records
+`no_story_reason` + attempt count in `other_params`, marks sessions exhausted after a cap, excludes them
+from re-selection) and wired all nine pilot crons; also fixed the misleading `chat_sessions_without_story`
+docstring. The unbounded silent-retry loop is now bounded and the gap is queryable. Remaining below.
+
 - [ ] (DATA) Back-classify the existing 103 + 52 sessions-without-story rows with a reason. Becomes
-  largely unnecessary once the code fix records `no_story_reason` on new/processed sessions.
+  largely unnecessary once the code fix records `no_story_reason` on new/processed sessions (the crons
+  will annotate these rows on their next passes).
+- [ ] (DECISION) Optionally tighten `chat_sessions_without_story` selection to strictly exclude
+  non-COMPLETED / test sessions. Deferred deliberately: the code fix only reconciled the docstring with
+  the existing 30-minute-grace behavior; changing which sessions are selected risks dropping legitimate
+  work and needs a product/data-owner call.
 
 ## Issue 8 - org translate vs transliterate
 
