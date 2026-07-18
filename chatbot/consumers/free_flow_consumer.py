@@ -3,7 +3,8 @@ import os
 import traceback
 from chatbot.celery_tasks.common_chat_tasks import save_in_company_db
 from chatbot.consumers.async_base_consumer import AsyncBaseConsumer
-from chatbot.models import ChatStatus, ChatSession, Profile, CompanyBot
+from chatbot.models import ChatStatus, ChatSession, Profile, CompanyBot, ChatType
+from chatbot.utils.session_type_utils import resolve_session_type
 import logging
 from channels.db import database_sync_to_async
 import jwt
@@ -198,7 +199,7 @@ class FreeFlowConsumer(AsyncBaseConsumer):
                 'company_bot': company_bot,
                 'session_status': ChatStatus.IN_PROGRESS,
                 'user_id': user_id,
-                'session_type': self.flow_name
+                'session_type': resolve_session_type(self.flow_name, default=ChatType.FreeFlow.value)
             }
         )
         logger.info(f"Chat session for free-flow: %s %s", cs, cs_created)

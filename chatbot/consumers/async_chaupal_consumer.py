@@ -7,6 +7,7 @@ from chatbot.consumers.async_base_consumer import AsyncBaseConsumer
 from chatbot.models import ChatStatus, ChatSession, Profile, CompanyBot, Voice, VoiceType, ChatType, CompanyChat
 from chatbot.celery_tasks.chaupal_tasks import get_chaupal_response
 from chatbot.models.company_models import CompanyStateMachine
+from chatbot.utils.session_type_utils import resolve_session_type
 from chatbot.utils.audio_provider_utils import text_translate_provider
 import logging
 from channels.db import database_sync_to_async
@@ -162,7 +163,7 @@ class AsyncShikshalokamChaupalConsumer(AsyncBaseConsumer):
                 'language': self.route,
                 'company_bot': company_bot,
                 'session_status': ChatStatus.IN_PROGRESS,
-                'session_type': ChatType.shikshaChaupal
+                'session_type': resolve_session_type(ChatType.shikshaChaupal.value)
             }
         )
         logger.info(f"Chatsession: %s %s", cs, cs_created)

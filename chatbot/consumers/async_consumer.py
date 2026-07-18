@@ -9,6 +9,7 @@ from chatbot.models import ChatStatus, ChatSession, Profile, CompanyBot, Voice, 
 from chatbot.celery_tasks.flow_tasks import get_flow_response
 from chatbot.models.company_models import CompanyStateMachine
 from chatbot.utils.audio_provider_utils import text_translate_provider
+from chatbot.utils.session_type_utils import resolve_session_type
 import logging
 from channels.db import database_sync_to_async
 from chatbot.utils.transliterate_utils import transliterate_text
@@ -209,7 +210,7 @@ class AsyncSocketConsumer(AsyncBaseConsumer):
                 'company_bot': company_bot,
                 'session_status': ChatStatus.IN_PROGRESS,
                 'user_id': user_id,
-                'session_type': self.flow_name
+                'session_type': resolve_session_type(self.flow_name)
             }
         )
         logger.info(f"Chatsession: %s %s", cs, cs_created)
