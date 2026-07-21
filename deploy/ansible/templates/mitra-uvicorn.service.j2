@@ -1,0 +1,68 @@
+# =============================================================================
+# systemd unit: mitra-uvicorn
+#
+# This file is a Jinja2 TEMPLATE - it is never edited directly. Ansible's
+# `template` task in deploy.yml renders it to /etc/systemd/system/mitra-uvicorn.service
+# on the target host, filling in every templated variable below from deploy.yml's `vars:`
+# section (or whatever Jenkins overrode via -e extra-vars).
+# =============================================================================
+
+[Unit]
+# Shown in `systemctl status mitra-uvicorn` and journalctl output.
+Description=Mitra ASGI server (uvicorn)
+
+# Don't start until networking is up, and start AFTER Redis - Django
+# Channels needs Redis as its channel layer to route WebSocket messages
+# between uvicorn's multiple worker processes (they don't share memory).
+#
+# Confirmed on the dev host: Redis runs as the standard Debian/Ubuntu
+# package unit "redis-server.service" (enabled, listening on 127.0.0.1:6379)
+# - not "redis.service". Update this if a future host names it differently.
+After=network.target redis-server.service
+
+[Service]
+# "simple" = systemd considers the unit started as soon as ExecStart's
+# process launches - uvicorn does not fork/daemonize itself.
+Type=simple
+
+# Run as root - matches the current tmux-based setup, where the existing
+# uvicorn process was also confirmed running as root via `ps aux`.
+User=root
+
+# All relative paths below resolve from here. This is a FIXED directory
+# path, not a symlink - deploy.yml deletes and recreates it with fresh
+# code on every deploy, so this path itself never changes even though
+# what's inside it does.
+WorkingDirectory={{ current_path }}
+
+# Loads KEY=VALUE lines from this file as environment variables for the
+# process. This .env is fetched fresh from Vault directly into this
+# directory by deploy.yml on every deploy.
+EnvironmentFile={{ current_path }}/.env
+
+# Runs uvicorn from THIS release's virtualenv (created by `uv sync` in
+# deploy.yml) using its absolute path - systemd does not run through an
+# activated shell, so relying on `uvicorn` being on some PATH would not
+# work here the way it does in an interactive terminal.
+ExecStart={{ current_path }}/.venv/bin/uvicorn shikshalokam_mohini.asgi:application \
+    --host {{ uvicorn_host }} \
+    --port {{ uvicorn_port }} \
+    --workers {{ uvicorn_workers }} \
+    --ws-ping-interval {{ ws_ping_interval }} \
+    --ws-ping-timeout {{ ws_ping_timeout }}
+
+# Automatically restart if this process ever dies for any reason - crash,
+# OOM kill, unhandled exception. This is the central reason for migrating
+# off tmux, which does nothing at all when a process dies silently.
+Restart=always
+
+# Wait 5 seconds between restart attempts, so a fundamentally broken
+# deploy (e.g. bad config) doesn't spin in a tight crash-restart loop.
+RestartSec=5
+
+[Install]
+# Registers this unit to start automatically on server boot once enabled -
+# this is what makes the service survive a reboot with no manual
+# intervention, unlike the old tmux sessions which simply vanished on
+# reboot.
+WantedBy=multi-user.target
