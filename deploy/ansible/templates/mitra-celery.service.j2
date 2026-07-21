@@ -1,0 +1,69 @@
+# =============================================================================
+# systemd unit: mitra-celery
+#
+# This file is a Jinja2 TEMPLATE - it is never edited directly. Ansible's
+# `template` task in deploy.yml renders it to /etc/systemd/system/mitra-celery.service
+# on the target host, filling in every templated variable below from deploy.yml's `vars:`
+# section (or whatever Jenkins overrode via -e extra-vars).
+# =============================================================================
+
+[Unit]
+Description=Mitra Celery worker (LLM task processing)
+
+# Start after networking and Redis - Redis is both this worker's message
+# broker AND the Django Channels layer it publishes bot responses through
+# back to whichever uvicorn worker process holds the relevant WebSocket.
+#
+# Confirmed on the dev host: Redis runs as the standard Debian/Ubuntu
+# package unit "redis-server.service" (enabled, listening on 127.0.0.1:6379)
+# - not "redis.service". Update this if a future host names it differently.
+After=network.target redis-server.service
+
+[Service]
+Type=simple
+
+# Run as root - matches current behavior, confirmed via `ps aux` showing
+# the existing celery worker process already running as root.
+User=root
+
+# Fixed app directory - deploy.yml deletes and recreates this path with
+# fresh code on every deploy (not a symlink), so this path itself never
+# changes even though what's inside it does.
+WorkingDirectory={{ current_path }}
+
+# Same .env as uvicorn - both processes need identical DB/Redis/LLM
+# provider credentials to operate on the same data and broker.
+EnvironmentFile={{ current_path }}/.env
+
+# Runs celery from THIS release's virtualenv directly via absolute path,
+# same reasoning as the uvicorn unit (systemd doesn't use an activated
+# shell, so a bare `celery` on PATH would not reliably resolve).
+#
+# -n worker@%h (rather than a hardcoded "-n worker") sets the Celery node
+# name using systemd's %h specifier, which expands to this host's actual
+# hostname at runtime. This matters if this service is ever run on more
+# than one instance - two workers both named plain "worker" on different
+# hosts would collide/be indistinguishable in Celery's own bookkeeping;
+# "worker@<hostname>" keeps each instance uniquely identified for free.
+ExecStart={{ current_path }}/.venv/bin/celery -A shikshalokam_mohini worker \
+    -P {{ celery_pool }} \
+    --concurrency {{ celery_concurrency }} \
+    --prefetch-multiplier {{ celery_prefetch_multiplier }} \
+    --loglevel={{ celery_loglevel }} \
+    -n worker@%h
+
+# Celery tasks here are often long-running LLM calls (Bedrock/OpenAI). On
+# a restart or stop, send SIGTERM (celery's "warm shutdown" signal, which
+# lets in-flight tasks finish) and give it up to 30 seconds to exit
+# cleanly before systemd escalates to SIGKILL.
+KillSignal=SIGTERM
+TimeoutStopSec=30
+
+# Same crash-recovery behavior as the uvicorn unit - restart automatically
+# on any unexpected exit (e.g. an OOM kill from a runaway task), with a
+# 5-second delay between attempts to avoid a tight crash loop.
+Restart=always
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target

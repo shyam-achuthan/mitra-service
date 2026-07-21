@@ -1,0 +1,438 @@
+---
+# =============================================================================
+# Mitra Service Deployment Playbook
+# =============================================================================
+# Single flat playbook (deliberately no roles/ - this deploys one service to
+# one set of hosts, not a reusable abstraction across multiple apps).
+#
+# Deploys the Mitra service (uvicorn + celery; repo: shikshalokam-mohini-service)
+# to a target EC2 host using a DELETE-AND-REPLACE strategy: clone into a temporary release folder,
+# install deps + fetch secrets + migrate there, then delete the old live
+# directory and move the new one into its place. Downtime during that swap
+# is expected and accepted (this project intentionally does NOT use an
+# atomic symlink swap) - matches the same pattern already used by this
+# team's elevate services.
+#
+# Invoked by Jenkins (pipeline script lives inline in each Jenkins job, not
+# in this repo) roughly as:
+#
+#   ansible-playbook -i "<host_ip>," deploy.yml \
+#     -e repo_url=<git url>          \
+#     -e repo_ref=<branch or tag>    \
+#     -e env_name=dev                \
+#     [-e uvicorn_workers=12]        \   # optional - omit to use the default below
+#     [-e celery_concurrency=75]         # optional - omit to use the default below
+#
+# repo_url / repo_ref / env_name have NO default here on purpose - a deploy
+# without knowing what to deploy or which environment doesn't make sense, so
+# Ansible will fail loudly with an "undefined variable" error if Jenkins
+# forgets to pass one, rather than silently deploying the wrong thing.
+# =============================================================================
+
+- name: Deploy Mitra service (uvicorn + celery)
+  # "all" here - actual host targeting is done by Jenkins via `-i
+  # /opt/ansibleConfigs/inventory.ini -l <group>` (a shared static inventory
+  # covering all environments), so "all" intersected with that --limit
+  # resolves to just this job's one host.
+  hosts: all
+
+  # Every task below needs root (writing under /opt, installing systemd
+  # units under /etc, restarting services) - become: true is equivalent to
+  # running the whole play through `sudo`.
+  become: true
+
+  # Collects facts like ansible_hostname - not strictly required by anything
+  # below, but harmless and occasionally useful for debugging output.
+  gather_facts: true
+
+  vars:
+    # -------------------------------------------------------------------
+    # Structural paths - these should NOT need to differ between
+    # environments, so they are not exposed as Jenkins parameters.
+    # -------------------------------------------------------------------
+
+    # Root directory for this service on the server, per the directory
+    # migration decision (moving off /home/ubuntu/, matching elevate's
+    # /opt/backend/deployment/ convention).
+    project_path: /opt/deployment/backend/mitra-service
+
+    # Vault token file lives at the top level of the shared deployment
+    # directory (not nested under this service's own project_path) - it's
+    # a one-time-per-host prerequisite shared across services on this box.
+    vault_token_path: /opt/deployment/.token
+
+    # The one, fixed, always-live app directory. Unlike a symlink-swap
+    # design, this is a REAL directory that gets deleted and recreated on
+    # every deploy - there is no history of past releases kept on disk.
+    current_path: "{{ project_path }}/mitra-backend-service"
+
+    # release_timestamp / release_path are deliberately NOT defined here as
+    # plain vars using lookup('pipe', 'date ...') - a lookup() inside vars:
+    # is NOT computed once and cached, it re-runs on every single reference
+    # across the play. Since real time passes between tasks, that let
+    # release_path silently resolve to a DIFFERENT string later in the play
+    # than what earlier tasks actually created, causing a "No such file or
+    # directory" failure on a directory that genuinely existed. Instead,
+    # they're computed once via `set_fact` in the first task below - facts
+    # ARE cached/fixed for the rest of the play, unlike vars: lookups.
+
+    # ---------------------------------------------------------------------
+    # Vault settings - PLACEHOLDERS. Vault paths for this service don't
+    # exist yet; update vault_env_path / vault_secrets_path once they're
+    # created. Assumes KV v2 (secret payload nested under .data.data) per
+    # the existing deployment-automation findings doc.
+    # ---------------------------------------------------------------------
+
+    # Base Vault API URL, including the KV v2 mount + literal "data/"
+    # segment for this environment - e.g. ".../v1/Dev_env/data/". Overridden
+    # with -e vault_address=... from Jenkins (see the VAULT_ADDRESS
+    # environment{} var there) since the whole thing (host + mount) differs
+    # per environment; this is just the fallback if Jenkins doesn't pass it.
+    vault_address: "https://10.0.136.199:8200/v1/Dev_env/data/"
+
+    # Secret names under vault_address above - assumed identical across
+    # environments (only vault_address itself changes per env).
+    vault_env_path: "mitra_backend_service_env"
+    vault_secrets_path: "mitra_gcp_credentials"
+
+    # ---------------------------------------------------------------------
+    # Uvicorn / Celery tuning - these ARE meant to be overridden via -e
+    # from Jenkins (dropdown parameters on the Jenkins side). The values
+    # below are what's used if Jenkins passes nothing for that parameter -
+    # Ansible's extra-vars (-e) always win over these play vars, so leaving
+    # a Jenkins parameter blank naturally falls through to the default here.
+    # ---------------------------------------------------------------------
+    uvicorn_host: "0.0.0.0"
+    uvicorn_port: 9000
+    uvicorn_workers: 4
+    ws_ping_interval: 30
+    ws_ping_timeout: 300
+
+    celery_pool: threads
+    celery_concurrency: 50
+    celery_prefetch_multiplier: 1
+    celery_loglevel: info
+
+  tasks:
+    # =====================================================================
+    # Every deploy task lives inside this one block so that ANY failure,
+    # anywhere in the sequence, routes to `rescue:` below instead of just
+    # aborting the play - otherwise a failure early on (e.g. a missing
+    # dependency, a bad Vault path) leaves that run's release_path folder
+    # orphaned on disk forever, since the explicit cleanup task (STEP 7)
+    # only runs on the success path. See rescue: below for what happens on
+    # failure.
+    # =====================================================================
+    - name: Build and deploy the new release
+      block:
+        # =================================================================
+        # STEP 0 - Freeze release_timestamp/release_path as facts, computed
+        # exactly once here. Every later task in this play references
+        # {{ release_path }} expecting the SAME value used by this task -
+        # see the comment on vars: above for why a plain lookup()-based var
+        # would NOT guarantee that.
+        # =================================================================
+
+        - name: Compute this run's release path (once, cached as a fact)
+          set_fact:
+            release_timestamp: "{{ lookup('pipe', 'date +%Y%m%d%H%M%S') }}"
+
+        - name: Derive release_path from the frozen timestamp
+          set_fact:
+            release_path: "{{ project_path }}/releases/{{ release_timestamp }}"
+
+        # =================================================================
+        # STEP 1 - Clone the requested code into a fresh, temporary release
+        # directory. current_path is completely untouched so far.
+        # =================================================================
+
+        - name: Create temporary release directory
+          file:
+            path: "{{ release_path }}"
+            state: directory
+            mode: "0755"
+            recurse: true
+
+        - name: Clone repository at the requested branch or tag
+          git:
+            repo: "{{ repo_url }}"
+            dest: "{{ release_path }}"
+            # git's `version` accepts a branch name, tag name, or commit SHA
+            # interchangeably - Jenkins just passes whatever ref was selected,
+            # this playbook doesn't need separate branch-vs-tag handling.
+            version: "{{ repo_ref }}"
+            # Safety net: force a clean checkout even if something unexpected
+            # is already sitting in this (freshly created, normally empty)
+            # release directory.
+            force: true
+
+        # =================================================================
+        # STEP 2 - Fetch config/secrets.json from Vault into the release
+        # directory now (BEFORE the move below). This is a regular file, not
+        # a dotfile, so it's unaffected by the glob-based move in step 4.
+        # (.env is deliberately NOT fetched here - see step 5's comment.)
+        # =================================================================
+
+        - name: Ensure jq is installed (required to parse Vault's JSON response)
+          # Both this step's Vault fetch and step 5's .env fetch pipe curl's
+          # output through jq - without it those tasks fail with "jq: not
+          # found" (rc 127) after Vault has already been hit. Idempotent - a
+          # no-op if already present, so safe to run on every deploy rather
+          # than treating it as a manual one-time host prerequisite.
+          apt:
+            name: jq
+            state: present
+            update_cache: true
+
+        - name: Read the Vault token from disk
+          # slurp reads the file's raw bytes back base64-encoded over the
+          # Ansible control channel - decoded below with the `b64decode`
+          # filter wherever it's used. Same pattern as the existing elevate
+          # playbook's ".token" handling. This file is a one-time-per-host
+          # prerequisite placed outside of any release directory, so it
+          # survives every deploy untouched.
+          slurp:
+            src: "{{ vault_token_path }}"
+          register: vault_token_raw
+
+        - name: Ensure config directory exists for secrets.json
+          file:
+            path: "{{ release_path }}/config"
+            state: directory
+            mode: "0755"
+
+        - name: DEBUG - TEMPORARY - print secrets.json Vault URL
+          debug:
+            msg: "{{ vault_address }}{{ vault_secrets_path }}"
+
+        - name: Fetch secrets.json from Vault
+          # 1. curl GETs the secret from Vault, authenticating with the token
+          #    read above (decoded from base64 first).
+          # 2. jq '.data.data' unwraps the KV v2 response envelope down to the
+          #    actual key/value payload, written directly as JSON (no
+          #    json2env conversion - config/secrets.json is consumed as raw
+          #    JSON by the app, per this project's CLAUDE.md).
+          shell: >
+            curl --silent --insecure --location --request GET
+            '{{ vault_address }}{{ vault_secrets_path }}'
+            --header 'X-Vault-Token: {{ vault_token_raw.content | b64decode | trim }}'
+            | jq '.data.data' > {{ release_path }}/config/secrets.json
+          args:
+            creates: "{{ release_path }}/config/secrets.json"
+
+        # =================================================================
+        # STEP 3 - Install Python dependencies now, before the move. This
+        # doesn't need .env / DB credentials, so it's safe to do at this
+        # point - matches the elevate script's "npm i before move" ordering.
+        # =================================================================
+
+        - name: Install Python dependencies with uv
+          # --frozen refuses to re-resolve dependencies and instead installs
+          # exactly what's pinned in uv.lock - matches this project's existing
+          # tooling (confirmed via pyproject.toml + uv.lock in the repo).
+          command: uv sync --frozen
+          args:
+            chdir: "{{ release_path }}"
+
+        # =================================================================
+        # STEP 4 - Replace the live directory: delete the old current_path
+        # entirely, recreate it empty, then move the release's contents in.
+        #
+        # IMPORTANT: `mv {{ release_path }}/* {{ current_path }}/` uses shell
+        # globbing, which does NOT match dotfiles (like .env or .git). That's
+        # exactly why .env is fetched in step 5, AFTER this move, directly
+        # into current_path - if it were fetched earlier into release_path,
+        # this glob-based move would silently leave it behind and it would be
+        # lost when release_path is deleted in step 7. This mirrors the same
+        # ordering already used (for the same reason) in the elevate
+        # deployment script.
+        #
+        # This is the point where downtime happens: between "delete old" and
+        # "move new in", current_path briefly doesn't exist. That gap is
+        # accepted for this project rather than avoided with a symlink swap.
+        # =================================================================
+
+        - name: Delete old live directory
+          file:
+            path: "{{ current_path }}"
+            state: absent
+
+        - name: Recreate live directory (empty)
+          file:
+            path: "{{ current_path }}"
+            state: directory
+            mode: "0755"
+
+        - name: Move release contents into the live directory
+          # Ansible has no built-in "move all contents of one directory into
+          # another" module, so this uses the shell directly - same approach
+          # the elevate script already takes for this exact step.
+          shell: "mv {{ release_path }}/* {{ current_path }}/"
+
+        # =================================================================
+        # STEP 5 - Fetch the .env file from Vault directly into current_path,
+        # now that the code is already in its final location. See step 4's
+        # comment for why this has to happen after the move, not before.
+        # =================================================================
+
+        - name: DEBUG - TEMPORARY - print .env Vault URL
+          debug:
+            msg: "{{ vault_address }}{{ vault_env_path }}"
+
+        - name: Fetch env config from Vault and write .env
+          shell: >
+            curl --silent --insecure --location --request GET
+            '{{ vault_address }}{{ vault_env_path }}'
+            --header 'X-Vault-Token: {{ vault_token_raw.content | b64decode | trim }}'
+            | jq '.data.data'
+            | {{ current_path }}/scripts/json2env.sh > {{ current_path }}/.env
+          args:
+            creates: "{{ current_path }}/.env"
+
+        - name: Ensure json2env.sh is executable
+          # Fresh git checkouts don't always preserve the executable bit
+          # depending on how it was committed - make sure it's runnable before
+          # the task above (and any future manual use) relies on it.
+          file:
+            path: "{{ current_path }}/scripts/json2env.sh"
+            mode: "0755"
+
+        # =================================================================
+        # STEP 6 - Create a fresh logs/ directory inside the live app
+        # directory. Since the directory was just deleted and recreated from
+        # a git checkout (git doesn't track empty directories, and logs/ is
+        # typically gitignored), this folder would not otherwise exist - and
+        # some Django logging handlers error out on startup if their target
+        # directory is missing. Recreated empty on every deploy; nothing here
+        # persists across replaces.
+        # =================================================================
+
+        - name: Ensure logs directory exists inside the app directory
+          file:
+            path: "{{ current_path }}/logs"
+            state: directory
+            mode: "0755"
+
+        # =================================================================
+        # STEP 7 - Now that .env exists in current_path, run migrations
+        # against the live code, then clean up the now-empty release folder.
+        # =================================================================
+
+        - name: Run Django migrations
+          command: uv run python manage.py migrate --noinput
+          args:
+            chdir: "{{ current_path }}"
+
+        - name: Remove the now-empty temporary release directory
+          file:
+            path: "{{ release_path }}"
+            state: absent
+
+        # =================================================================
+        # STEP 8 - Render the systemd unit files from the Jinja2 templates in
+        # templates/, injecting the tuning variables defined in `vars:` above
+        # (or overridden via Jenkins -e extra-vars).
+        # =================================================================
+
+        - name: Template the uvicorn systemd unit
+          template:
+            src: templates/mitra-uvicorn.service.j2
+            dest: /etc/systemd/system/mitra-uvicorn.service
+            mode: "0644"
+
+        - name: Template the celery systemd unit
+          template:
+            src: templates/mitra-celery.service.j2
+            dest: /etc/systemd/system/mitra-celery.service
+            mode: "0644"
+
+        # =================================================================
+        # STEP 9 - Reload systemd's unit cache and restart both services
+        # unconditionally. The whole point of this deploy is to run NEW
+        # APPLICATION CODE, which the running process needs a restart to pick
+        # up even when the unit file text itself (worker count, etc.) is
+        # unchanged from the previous deploy. This is also the moment the old
+        # process (still running against the now-deleted directory) is
+        # finally replaced.
+        # =================================================================
+
+        - name: Reload systemd daemon (pick up any unit file changes)
+          systemd:
+            daemon_reload: true
+
+        - name: Enable and restart mitra-uvicorn
+          systemd:
+            name: mitra-uvicorn
+            enabled: true
+            state: restarted
+
+        - name: Enable and restart mitra-celery
+          systemd:
+            name: mitra-celery
+            enabled: true
+            state: restarted
+
+        # =================================================================
+        # STEP 10 - Health check the freshly restarted service. There is no
+        # rollback here (unlike a symlink-swap design) - the previous code is
+        # already gone by this point, so a failed health check just fails the
+        # Jenkins build loudly for manual investigation rather than silently
+        # reporting success.
+        # =================================================================
+
+        - name: DEBUG - TEMPORARY - print health check URL
+          debug:
+            msg: "http://localhost:{{ uvicorn_port }}/health/"
+
+        - name: Health check the new deployment
+          uri:
+            url: "http://localhost:{{ uvicorn_port }}/health/"
+            status_code: 200
+            timeout: 5
+          register: health_result
+          # The service just restarted and needs a moment to boot - retry
+          # for up to 15 seconds (5 attempts, 3s apart) before giving up.
+          retries: 10
+          delay: 5
+          until: health_result.status is defined and health_result.status == 200
+
+        - name: DEBUG - TEMPORARY - print health check response
+          debug:
+            msg: "status={{ health_result.status | default('n/a') }} body={{ health_result.json | default(health_result.content | default('n/a')) }}"
+
+        # If the uri task above never reaches a 200, Ansible's default
+        # behavior (no ignore_errors here) already fails the play right there
+        # with a clear error - no separate `fail` task is needed.
+
+      rescue:
+        # =================================================================
+        # Runs on ANY failure inside the block above, regardless of which
+        # step it happened at. Scope is deliberately narrow: this only
+        # cleans up the temporary release_path folder (disk hygiene), it
+        # does NOT attempt to roll back current_path if the failure happened
+        # after STEP 4's delete-and-swap - that's an already-accepted gap
+        # (see STEP 10's original comment) and out of scope here. The
+        # `file: state: absent` below is safe/idempotent even if
+        # release_path was never created, or was already removed by STEP 7
+        # before a later step failed.
+        # =================================================================
+
+        - name: Clean up the temporary release directory after failure
+          file:
+            path: "{{ release_path }}"
+            state: absent
+
+        - name: Re-fail the play now that cleanup is done
+          # block/rescue swallows the original failure by default - without
+          # this, a cleaned-up-but-still-broken deploy would report SUCCESS
+          # to Jenkins, which is exactly the false-positive failure mode
+          # this whole pipeline has already been through once (the inventory
+          # issue). Re-raising here ensures Jenkins still goes red.
+          fail:
+            msg: >-
+              Deploy failed - see the failed task's output above this
+              message for the real error. The temporary release directory
+              has been cleaned up. If the failure occurred after the
+              old live directory was deleted (STEP 4), current_path may be
+              missing or partially replaced - manual investigation required,
+              there is no automatic rollback.
