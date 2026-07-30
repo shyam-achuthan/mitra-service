@@ -175,6 +175,18 @@ DATABASES = {
             'sslrootcert': os.getenv('PG_SSL_ROOT_CERT')
         },
     },
+    'source_db': {
+        'ENGINE': 'django.db.backends.postgresql',
+        'NAME': os.getenv('SOURCE_DATABASE_NAME'),
+        'USER': os.getenv('SOURCE_DATABASE_USER'),
+        'PASSWORD': os.getenv('SOURCE_DATABASE_PASSWORD'),
+        'HOST': os.getenv('SOURCE_DATABASE_HOST'),
+        'PORT': os.getenv('SOURCE_DATABASE_PORT'),
+        'OPTIONS': {
+            'sslmode': os.getenv('PG_SSL_MODE'),
+            'sslrootcert': os.getenv('PG_SSL_ROOT_CERT')
+        },
+    },
 }
 
 
@@ -212,7 +224,7 @@ USE_TZ = True
 # Static files (CSS, JavaScript, Images)
 # https://docs.djangoproject.com/en/4.2/howto/static-files/
 
-STATIC_URL = 'static/'
+STATIC_URL = '/static/'
 STATIC_ROOT = os.getenv('STATIC_ROOT', '/var/www/shikshalokam/static/')
 STATICFILES_DIRS = [
     os.path.join(BASE_DIR, 'static')
@@ -228,10 +240,15 @@ ASGI_APPLICATION = 'shikshalokam_mohini.asgi.application'
 REDIS_HOST = os.environ.get('REDIS_HOST', "127.0.0.1")
 REDIS_PORT = int(os.environ.get('REDIS_PORT', 6379))
 REDIS_USE_SSL = os.environ.get('REDIS_USE_SSL', 'false').lower() == 'true'
+REDIS_SSL_CERT_REQS = os.environ.get('REDIS_SSL_CERT_REQS', 'CERT_NONE')
 
 # Build Redis connection URL with SSL support
 REDIS_PROTOCOL = 'rediss' if REDIS_USE_SSL else 'redis'
-REDIS_URL = f'{REDIS_PROTOCOL}://{REDIS_HOST}:{REDIS_PORT}'
+
+if REDIS_USE_SSL:
+    REDIS_URL = f'{REDIS_PROTOCOL}://{REDIS_HOST}:{REDIS_PORT}?ssl_cert_reqs={REDIS_SSL_CERT_REQS}'
+else:
+    REDIS_URL = f'{REDIS_PROTOCOL}://{REDIS_HOST}:{REDIS_PORT}'
 
 # Celery uses its own Redis database and a service-specific queue so a shared
 # Redis instance never mixes this service's tasks with another service's
@@ -239,11 +256,11 @@ REDIS_URL = f'{REDIS_PROTOCOL}://{REDIS_HOST}:{REDIS_PORT}'
 REDIS_CELERY_DB = int(os.environ.get('REDIS_CELERY_DB', 2))
 CELERY_BROKER_URL = f'{REDIS_URL}/{REDIS_CELERY_DB}'
 CELERY_RESULT_BACKEND = f'{REDIS_URL}/{REDIS_CELERY_DB}'
-CELERY_TASK_DEFAULT_QUEUE = os.environ.get('CELERY_TASK_DEFAULT_QUEUE', 'sg_commons_queue')
+CELERY_TASK_DEFAULT_QUEUE = os.environ.get('CELERY_TASK_DEFAULT_QUEUE', 'mitra_opti_service_queue')
 
 CHANNEL_LAYERS = {
     "default": {
-        "BACKEND": "channels_redis.core.RedisChannelLayer",
+        "BACKEND": "channels_redis.pubsub.RedisPubSubChannelLayer",
         "CONFIG": {
             "hosts": [REDIS_URL],
             "capacity": 100000,
@@ -500,4 +517,23 @@ CRONJOBS = [
     '>> /tmp/telangana_ptm_pilot_school_classification.log 2>&1'),
     ('15 */2 * * *', 'chatbot.cron_tasks.telangana_ptm_pilot.metrics_extraction.extract_metrics',
     '>> /tmp/telangana_ptm_pilot_metrics_extraction.log 2>&1'),
+    ('0 12 * * *', 'chatbot.cron_tasks.community_FGD.story_creation.create_story',
+    '>> /tmp/community_FGD_story_creation.log 2>&1'),
+    ('0 12 * * *', 'chatbot.cron_tasks.odisha_youth.story_creation.create_story',
+    '>> /tmp/odisha_youth_story_creation.log 2>&1'),
+    ('0 12 * * *', 'chatbot.cron_tasks.pppi_set_1.story_creation.create_story',
+    '>> /tmp/pppi_set_1_story_creation.log 2>&1'),
+
+    ('0 12 * * *', 'chatbot.cron_tasks.pppi_set_2.story_creation.create_story',
+    '>> /tmp/pppi_set_2_story_creation.log 2>&1'),
+    ('0 */2 * * *', 'chatbot.cron_tasks.stakeholder_fgd.district_classification.classify_districts',
+    '>> /tmp/stakeholder_fgd_district_classification.log 2>&1'),
+    ('0 */2 * * *', 'chatbot.cron_tasks.student_fgd.district_classification.classify_districts',
+    '>> /tmp/student_fgd_district_classification.log 2>&1'),
+    ('0 12 * * *', 'chatbot.cron_tasks.stakeholder_fgd.story_creation.create_story',
+    '>> /tmp/stakeholder_fgd_story_creation.log 2>&1'),
+    ('0 12 * * *', 'chatbot.cron_tasks.student_fgd.story_creation.create_story',
+    '>> /tmp/student_fgd_story_creation.log 2>&1'),
+    ('0 12 * * *', 'chatbot.cron_tasks.xylem.story_creation.create_story',
+    '>> /tmp/xylem_story_creation.log 2>&1')
 ]
