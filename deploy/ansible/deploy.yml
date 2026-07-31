@@ -20,8 +20,12 @@
 #     -e repo_url=<git url>          \
 #     -e repo_ref=<branch or tag>    \
 #     -e env_name=dev                \
-#     [-e uvicorn_workers=12]        \   # optional - omit to use the default below
-#     [-e celery_concurrency=75]         # optional - omit to use the default below
+#     [-e uvicorn_workers=12]                              \   # optional - omit to use the default below
+#     [-e celery_concurrency=75]                            \   # optional - omit to use the default below
+#     [-e uvicorn_service_name=mitra-optimization-uvicorn.service] \   # optional - omit to use the default below
+#     [-e celery_service_name=mitra-optimization-celery.service]   \   # optional - omit to use the default below
+#     [-e project_path=/opt/deployment/backend/mitra-optimization] \   # optional - omit to use the default below
+#     [-e vault_token_path=/opt/deployment/.token]                     # optional - omit to use the default below
 #
 # repo_url / repo_ref / env_name have NO default here on purpose - a deploy
 # without knowing what to deploy or which environment doesn't make sense, so
@@ -47,18 +51,21 @@
 
   vars:
     # -------------------------------------------------------------------
-    # Structural paths - these should NOT need to differ between
-    # environments, so they are not exposed as Jenkins parameters.
+    # Structural paths - defaults below match the directory migration
+    # decision (moving off /home/ubuntu/, matching elevate's
+    # /opt/backend/deployment/ convention). Overridable via -e from
+    # Jenkins, same fallback rule as the tuning vars further down: Ansible
+    # extra-vars always win over these play vars, so leaving the Jenkins
+    # parameter blank naturally falls through to the default here.
     # -------------------------------------------------------------------
 
-    # Root directory for this service on the server, per the directory
-    # migration decision (moving off /home/ubuntu/, matching elevate's
-    # /opt/backend/deployment/ convention).
+    # Root directory for this service on the server.
     project_path: /opt/deployment/backend/mitra-service
 
-    # Vault token file lives at the top level of the shared deployment
-    # directory (not nested under this service's own project_path) - it's
-    # a one-time-per-host prerequisite shared across services on this box.
+    # Vault token file. Defaults to the top level of the shared deployment
+    # directory (not nested under this service's own project_path) since
+    # it's normally a one-time-per-host prerequisite shared across services
+    # on this box - override only if a given host keeps it somewhere else.
     vault_token_path: /opt/deployment/.token
 
     # The one, fixed, always-live app directory. Unlike a symlink-swap
@@ -88,7 +95,7 @@
     # with -e vault_address=... from Jenkins (see the VAULT_ADDRESS
     # environment{} var there) since the whole thing (host + mount) differs
     # per environment; this is just the fallback if Jenkins doesn't pass it.
-    vault_address: "https://10.0.136.199:8200/v1/Dev_env/data/"
+    vault_address: "https://demo-vault-domain/v1/Dev_env/data/"
 
     # Secret names under vault_address above - assumed identical across
     # environments (only vault_address itself changes per env).
@@ -112,6 +119,15 @@
     celery_concurrency: 50
     celery_prefetch_multiplier: 1
     celery_loglevel: info
+
+    # ---------------------------------------------------------------------
+    # systemd unit names - ALSO overridable via -e from Jenkins, same
+    # fallback rule as the tuning vars above. Pass the full unit filename
+    # (including the .service suffix), e.g.
+    # -e uvicorn_service_name=mitra-optimization-uvicorn.service
+    # ---------------------------------------------------------------------
+    uvicorn_service_name: "mitra-uvicorn.service"
+    celery_service_name: "mitra-celery.service"
 
   tasks:
     # =====================================================================
@@ -337,13 +353,13 @@
         - name: Template the uvicorn systemd unit
           template:
             src: templates/mitra-uvicorn.service.j2
-            dest: /etc/systemd/system/mitra-uvicorn.service
+            dest: "/etc/systemd/system/{{ uvicorn_service_name }}"
             mode: "0644"
 
         - name: Template the celery systemd unit
           template:
             src: templates/mitra-celery.service.j2
-            dest: /etc/systemd/system/mitra-celery.service
+            dest: "/etc/systemd/system/{{ celery_service_name }}"
             mode: "0644"
 
         # =================================================================
@@ -360,15 +376,15 @@
           systemd:
             daemon_reload: true
 
-        - name: Enable and restart mitra-uvicorn
+        - name: Enable and restart uvicorn service
           systemd:
-            name: mitra-uvicorn
+            name: "{{ uvicorn_service_name }}"
             enabled: true
             state: restarted
 
-        - name: Enable and restart mitra-celery
+        - name: Enable and restart celery service
           systemd:
-            name: mitra-celery
+            name: "{{ celery_service_name }}"
             enabled: true
             state: restarted
 
